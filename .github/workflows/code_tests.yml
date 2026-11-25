@@ -1,0 +1,84 @@
+name: Code Tests
+
+on:
+  workflow_call:
+
+
+permissions:
+  contents: read
+
+
+jobs:
+  lint:
+    runs-on: ${{ fromJSON(vars.RUNNER_LABELS) }}
+
+    container:
+      image: docker.io/golangci/golangci-lint:v2.15.0-alpine@sha256:fb5d87d8e469f583363e2547f04e0b0d87f534dfa4617634730b0bd06e53aac5
+
+    permissions:
+      contents: read
+
+    steps:
+      - &step_checkout
+        name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download Go dependencies
+        run: go mod download
+
+      - name: Run static analysis
+        run: golangci-lint run ./...
+
+
+  race:
+    runs-on: ${{ fromJSON(vars.RUNNER_LABELS) }}
+
+    needs: lint
+
+    container:
+      image: &image_golang docker.io/library/golang:1.27.4-trixie@sha256:2cd7e1ebf475c6208122d2b9cefc638d98fcc8dfd8554c8872c9dd0c21f4ac61
+
+    permissions:
+      contents: read
+
+    steps:
+      - *step_checkout
+
+      - name: Download Go dependencies
+        run: go mod download
+
+      - name: Run tests with race detector
+        env:
+          CGO_ENABLED: "1"
+        run: go test -race -count=1 ./...
+
+
+  unit:
+    runs-on: ${{ fromJSON(vars.RUNNER_LABELS) }}
+
+    needs: lint
+
+    container:
+      image: *image_golang
+
+    permissions:
+      contents: read
+
+    steps:
+      - *step_checkout
+
+      - name: Download Go dependencies
+        run: go mod download
+
+      - name: Run unit tests
+        run: |
+          go test \
+            -count=1 \
+            -v \
+            -coverprofile=coverage.out \
+            ./...
+
+      - name: Show coverage
+        run: go tool cover -func=coverage.out

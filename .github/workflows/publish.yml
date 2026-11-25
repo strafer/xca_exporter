@@ -1,0 +1,134 @@
+name: Publish
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: Application version
+        required: true
+        type: string
+
+      image_hash_tag:
+        description: Full image URL with hash tag
+        required: true
+        type: string
+
+      binary:
+        description: Binary file name
+        required: true
+        type: string
+
+      archive:
+        description: Archived binary file name
+        required: true
+        type: string
+
+      build_timedate:
+        description: Build pipeline start time and date in UTC
+        required: true
+        type: string
+
+      image_semver_tag:
+        description: Full image URL with SemVer tag
+        required: true
+        type: string
+
+      semver:
+        description: Semantic version
+        required: true
+        type: string
+
+      prerelease_args:
+        description: Image build arguments for prerelease SemVer
+        required: true
+        type: string
+
+
+permissions:
+  contents: write
+  packages: write
+
+
+jobs:
+  semver-tagged-image:
+    runs-on: ${{ fromJSON(vars.RUNNER_LABELS) }}
+
+    container:
+      image: quay.io/skopeo/stable:v1.22.3-immutable@sha256:c0ee1f4edca5c01cb8d5611124f92f3cc47196ecab68aee5d0f90834e00574d5
+
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Add SemVer tag to image
+        env:
+          IMAGE_HASH_TAG: ${{ inputs.image_hash_tag }}
+          IMAGE_SEMVER_TAG: ${{ inputs.image_semver_tag }}
+          GITHUB_CREDS: ${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}
+        run: |
+          skopeo copy --src-creds "${GITHUB_CREDS}" --dest-creds "${GITHUB_CREDS}" docker://${IMAGE_HASH_TAG} docker://${IMAGE_SEMVER_TAG}
+
+
+  release:
+    runs-on: ${{ fromJSON(vars.RUNNER_LABELS) }}
+
+    needs: semver-tagged-image
+
+    container:
+      image: docker.io/serversideup/github-cli:alpine-2.102.0@sha256:006b171f7e83b00f116f8c8102394af2455ebfdf9f34b5fd0f7fdca526b5ef27
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download binary artifact
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
+        with:
+          name: xca_exporter-dist
+          path: dist
+
+
+      - name: Verify checksums
+        run: |
+          set -euo pipefail
+          cd dist
+          sha256sum -c sha256sums.txt
+
+
+      - name: Prepare release notes
+        env:
+          IMAGE_SEMVER_TAG: ${{ inputs.image_semver_tag }}
+        run: |
+          set -eu
+
+          cat > release-notes.md <<EOF
+          ## Container image
+
+          \`${IMAGE_SEMVER_TAG}\`
+
+          EOF
+
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ inputs.version }}
+          PRERELEASE_ARGS: ${{ inputs.prerelease_args }}
+          BUILD_TIMEDATE: ${{ inputs.build_timedate }}
+          BINARY: ${{ inputs.binary }}
+          ARCHIVE: ${{ inputs.archive }}
+        run: |
+          set -eu
+
+          gh release create "${TAG}"                     \
+            --verify-tag                                 \
+            --generate-notes                             \
+            --notes-file release-notes.md                \
+            --title "${VERSION} / ${BUILD_TIMEDATE%%T*}" \
+            ${PRERELEASE_ARGS}                           \
+            "dist/${BINARY}"                             \
+            "dist/${ARCHIVE}"                            \
+            "dist/sha256sums.txt"

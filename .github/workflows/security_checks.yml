@@ -1,0 +1,62 @@
+name: Code Tests
+
+on:
+  workflow_call:
+  schedule:
+    - cron: '0 0 * * *'
+
+
+permissions:
+  actions: read
+  contents: read
+  security-events: write
+
+
+jobs:
+  govulncheck:
+    runs-on: ${{ fromJSON(vars.RUNNER_LABELS) }}
+
+    container:
+      image: docker.io/library/golang:1.27.4-trixie@sha256:2cd7e1ebf475c6208122d2b9cefc638d98fcc8dfd8554c8872c9dd0c21f4ac61
+
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+
+      - name: Install govulncheck
+        env:
+          GOVULNCHECK_VERSION: v1.9.0
+        run: |
+          set -eu
+
+          GOBIN=/usr/local/bin \
+            go install golang.org/x/vuln/cmd/govulncheck@"${GOVULNCHECK_VERSION}"
+
+          govulncheck -version
+
+
+      - name: Form govulncheck SARIF
+        if: github.event.repository.private == false
+        id: govulncheck
+        run: govulncheck -format sarif ./... > govulncheck.sarif
+
+
+      - name: Upload govulncheck SARIF
+        if: github.event.repository.private == false && hashFiles('govulncheck.sarif') != ''
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: govulncheck.sarif
+          category: govulncheck
+
+
+      - name: Check vulnerabilities
+        run: |
+          govulncheck ./...

@@ -1,0 +1,100 @@
+name: Pipeline variables
+
+on:
+  workflow_call:
+    outputs:
+      build_timedate:
+        description: Build pipeline start time and date in UTC
+        value: ${{ jobs.metadata.outputs.build_timedate }}
+
+      version:
+        description: Application version
+        value: ${{ jobs.metadata.outputs.version }}
+
+      image_hash_tag:
+        description: Full image URL with hash tag
+        value: ${{ jobs.metadata.outputs.image_hash_tag }}
+
+      binary:
+        description: Binary file name
+        value: ${{ jobs.metadata.outputs.binary }}
+
+      archive:
+        description: Archived binary file name
+        value: ${{ jobs.metadata.outputs.archive }}
+
+      semver:
+        description: Semantic version
+        value: ${{ jobs.metadata.outputs.semver }}
+
+      prerelease_args:
+        description: Image build arguments for prerelease SemVer
+        value: ${{ jobs.metadata.outputs.prerelease_args }}
+
+      image_semver_tag:
+        description: Full image URL with SemVer tag
+        value: ${{ jobs.metadata.outputs.image_semver_tag }}
+
+
+permissions:
+  contents: read
+
+
+jobs:
+  metadata:
+    runs-on: ${{ fromJSON(vars.RUNNER_LABELS) }}
+
+    outputs:
+      build_timedate: ${{ steps.metadata.outputs.build_timedate }}
+      version: ${{ steps.metadata.outputs.version }}
+      image_hash_tag: ${{ steps.metadata.outputs.image_hash_tag }}
+      binary: ${{ steps.metadata.outputs.binary }}
+      archive: ${{ steps.metadata.outputs.archive }}
+      semver: ${{ steps.metadata.outputs.semver }}
+      prerelease_args: ${{ steps.metadata.outputs.prerelease_args }}
+      image_semver_tag: ${{ steps.metadata.outputs.image_semver_tag }}
+
+    container:
+      image: docker.io/library/bash:5.3.20-alpine3.24@sha256:a58e9f9837ec3fc2f0248c79d4a3faccbb0059418bb40461fbd1af70f65c7114
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: Initialize metadata
+        id: metadata
+        shell: bash
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          SEMVER_RE='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(\.(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*))?(\+([0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*))?$'
+
+          if [[ "${TAG}" =~ ${SEMVER_RE} ]]; then
+            SEMVER="${TAG#v}"
+
+            IMAGE_SEMVER_TAG="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/xca-exporter:${SEMVER}"
+
+            if [[ "${SEMVER%%+*}" == *-* ]]; then
+              PRERELEASE_ARGS="--prerelease --latest=false"
+            fi
+          else
+            echo "Not a SemVer tag: ${TAG}" >&2
+          fi
+
+          BUILD_TIMEDATE="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+          VERSION="${SEMVER:-${GITHUB_SHA:0:7}}"
+          BINARY="xca_exporter-${VERSION}-linux-amd64"
+          IMAGE_HASH_TAG="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/xca-exporter:sha-${GITHUB_SHA}"
+
+          {
+            printf 'build_timedate=%s\n' "${BUILD_TIMEDATE}"
+            printf 'version=%s\n' "${VERSION}"
+            printf 'image_hash_tag=%s\n' "${IMAGE_HASH_TAG}"
+            printf 'binary=%s\n' "${BINARY}"
+            printf 'archive=%s\n' "${BINARY}.tar.gz"
+            printf 'semver=%s\n' "${SEMVER:-}"
+            printf 'prerelease_args=%s\n' "${PRERELEASE_ARGS:-}"
+            printf 'image_semver_tag=%s\n' "${IMAGE_SEMVER_TAG:-}"
+          } >> "${GITHUB_OUTPUT}"

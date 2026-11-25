@@ -1,0 +1,30 @@
+version: "2"
+
+run:
+  timeout: 5m
+  tests: true
+  modules-download-mode: readonly
+  relative-path-mode: gomod
+
+linters:
+  default: none
+
+  enable:
+    - gosec
+    - govet
+    - staticcheck
+    - errcheck
+    - ineffassign
+    - unused
+
+    - errorlint
+    - nilerr
+    - bodyclose
+    - sqlclosecheck
+    - rowserrcheck
+    - durationcheck
+
+    - loggercheck
+    - promlinter
+
+    - copyloopvar

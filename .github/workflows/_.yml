@@ -1,0 +1,83 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  actions: read
+  contents: write
+  packages: write
+  security-events: write
+
+jobs:
+  variables:
+    uses: ./.github/workflows/variables.yml
+    permissions:
+      contents: read
+
+
+  security_checks:
+    uses: ./.github/workflows/security_checks.yml
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+
+
+  code_tests:
+    needs: security_checks
+    uses: ./.github/workflows/code_tests.yml
+    permissions:
+      contents: read
+
+
+  build:
+    needs:
+      - variables
+      - code_tests
+    uses: ./.github/workflows/build.yml
+    permissions:
+      contents: read
+      packages: write
+    with:
+      version: ${{ needs.variables.outputs.version }}
+      image_hash_tag: ${{ needs.variables.outputs.image_hash_tag }}
+      binary: ${{ needs.variables.outputs.binary }}
+      archive: ${{ needs.variables.outputs.archive }}
+      build_timedate: ${{ needs.variables.outputs.build_timedate }}
+
+
+  integration_tests:
+    needs:
+      - variables
+      - build
+    uses: ./.github/workflows/integration_tests.yml
+    permissions:
+      contents: read
+      packages: read
+    with:
+      image_hash_tag: ${{ needs.variables.outputs.image_hash_tag }}
+      binary: ${{ needs.variables.outputs.binary }}
+
+
+  publish:
+    if: needs.variables.outputs.semver != ''
+    needs:
+      - variables
+      - integration_tests
+    uses: ./.github/workflows/publish.yml
+    permissions:
+      contents: write
+      packages: write
+    with:
+      version: ${{ needs.variables.outputs.version }}
+      image_hash_tag: ${{ needs.variables.outputs.image_hash_tag }}
+      binary: ${{ needs.variables.outputs.binary }}
+      archive: ${{ needs.variables.outputs.archive }}
+      build_timedate: ${{ needs.variables.outputs.build_timedate }}
+      semver: ${{ needs.variables.outputs.semver }}
+      image_semver_tag: ${{ needs.variables.outputs.image_semver_tag }}
+      prerelease_args: ${{ needs.variables.outputs.prerelease_args }}

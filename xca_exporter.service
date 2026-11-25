@@ -1,0 +1,38 @@
+# /etc/systemd/system/xca_exporter.service
+
+[Unit]
+Description=XCA Prometheus Exporter
+Documentation=https://github.com/strafer/xca_exporter
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+
+User=xca-exporter
+Group=xca-exporter
+
+EnvironmentFile=-/etc/xca_exporter/environment
+
+ExecStart=/usr/local/bin/xca_exporter
+
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=30s
+
+UMask=0077
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+
+[Install]
+WantedBy=multi-user.target

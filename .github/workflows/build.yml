@@ -1,0 +1,200 @@
+name: Build executable and container image
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: Application version
+        required: true
+        type: string
+
+      image_hash_tag:
+        description: Full image URL with hash tag
+        required: true
+        type: string
+
+      binary:
+        description: Binary file name
+        required: true
+        type: string
+
+      archive:
+        description: Archived binary file name
+        required: true
+        type: string
+
+      build_timedate:
+        description: Build pipeline start time and date in UTC
+        required: true
+        type: string
+
+
+permissions:
+  contents: read
+  packages: write
+
+
+env:
+  TEST_EXPORTER_PORT: 9793
+  TEST_DBMS_USER: xca_test
+  TEST_DBMS_PASS: xca_test
+  TEST_DBMS_DBNAME: xca_test
+
+jobs:
+  executable:
+    runs-on: ${{ fromJSON(vars.RUNNER_LABELS) }}
+
+    container:
+      image: docker.io/library/golang:1.27.4-trixie@sha256:2cd7e1ebf475c6208122d2b9cefc638d98fcc8dfd8554c8872c9dd0c21f4ac61
+
+    permissions:
+      contents: read
+
+    steps:
+      - &step_checkout
+        name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+
+      - name: Build static binary
+        env:
+          VERSION: ${{ inputs.version }}
+          BINARY: ${{ inputs.binary }}
+          ARCHIVE: ${{ inputs.archive }}
+          REVISION: ${{ github.sha }}
+          BUILD_TIMEDATE: ${{ inputs.build_timedate }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir --parents dist/
+
+          git config --global --add safe.directory "${GITHUB_WORKSPACE}"
+
+          CGO_ENABLED=0 \
+          GOOS=linux    \
+          GOARCH=amd64  \
+            go build \
+              -trimpath \
+              -ldflags "-s -w \
+                -X main.version=${VERSION} \
+                -X main.revision=${REVISION} \
+                -X main.buildDate=${BUILD_TIMEDATE}" \
+              -o "dist/${BINARY}" \
+              ./src
+
+
+      - name: Package and calculate checksums
+        env:
+          BINARY: ${{ inputs.binary }}
+          ARCHIVE: ${{ inputs.archive }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          tar -C dist -czf "dist/${ARCHIVE}" "${BINARY}"
+
+          (
+            cd dist
+
+            sha256sum \
+              "${BINARY}"  \
+              "${ARCHIVE}" \
+              > sha256sums.txt
+          )
+
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: xca_exporter-dist
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+
+
+
+  container-image:
+    needs: executable
+
+    runs-on: ${{ fromJSON(vars.RUNNER_LABELS) }}
+
+    container:
+      image: quay.io/buildah/stable:v1.43.5-immutable@sha256:7c2b605262748ace2c5c57c5550942d0adad57aec82ede3070927722306c0ffb
+      options: >-
+        --security-opt seccomp=unconfined
+        --security-opt apparmor=unconfined
+
+    permissions:
+      contents: read
+      packages: write
+
+    env:
+      BINARY: ${{ inputs.binary }}
+
+    outputs:
+      image_tag: ${{ steps.image.outputs.image_tag }}
+
+    steps:
+      - *step_checkout
+
+      - name: Download binary artifact
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
+        with:
+          name: xca_exporter-dist
+          path: dist
+
+
+      - name: Verify checksums
+        run: |
+          set -euo pipefail
+          cd dist
+          sha256sum -c sha256sums.txt
+
+
+      - name: Prepare binary
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          BINARY_PATH="${GITHUB_WORKSPACE}/dist/${BINARY}"
+
+          test -s "${BINARY_PATH}"
+          chmod 0755 "${BINARY_PATH}"
+
+
+      - name: Build and push OCI image
+        id: image
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IMAGE_HASH_TAG: ${{ inputs.image_hash_tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          STORAGE="${HOME}/.local/share/containers/storage"
+          RUNROOT="/tmp/buildah-runtime/containers"
+
+          buildah \
+            --root "${STORAGE}" \
+            --runroot "${RUNROOT}" \
+            --storage-driver vfs \
+            bud \
+              --format oci \
+              --isolation=rootless \
+              --file "${GITHUB_WORKSPACE}/Containerfile" \
+              --build-arg "BINARY=${BINARY}" \
+              --build-arg "REVISION=${GITHUB_SHA}" \
+              --build-arg "SOURCE=https://github.com/${GITHUB_REPOSITORY}" \
+              --tag "${IMAGE_HASH_TAG}" \
+              "${GITHUB_WORKSPACE}"
+
+          buildah \
+            --root "${STORAGE}" \
+            --runroot "${RUNROOT}" \
+            --storage-driver vfs \
+            push \
+            --creds "${GITHUB_ACTOR}:${GITHUB_TOKEN}" \
+            "${IMAGE_HASH_TAG}"
